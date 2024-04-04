@@ -7,8 +7,8 @@ env:
   numEnvs: ${resolve_default:4096,${...num_envs}}
   envSpacing: 4.  # [m]
 
-  clipObservations: 5.0
-  clipActions: 1.0
+  clipObservations: 100.0
+  clipActions: 100.0
 
   controlFrequencyInv: 3 # 33Hz
 
@@ -24,9 +24,9 @@ env:
 
   control:
     # PD Drive parameters: 
-    stiffness: 30.0  # [N*m/rad]
-    damping: 2.0     # [N*m*s/rad]
-    actionScale: 1.25
+    stiffness: 20.0  # [N*m/rad]
+    damping: 0.5     # [N*m*s/rad]
+    actionScale: 0.25
 
   defaultJointAngles:
     FL_hip_joint: 0.0
@@ -46,24 +46,23 @@ env:
     
   learn:
     # rewards
-    linearVelocityXYRewardScale: 1.5
-    angularVelocityZRewardScale: 1.5
-    linearVelocityZRewardScale: -0.03
-    jointAccRewardScale: -0.0003
-    actionRateRewardScale: -0.03
-    cosmeticRewardScale: -0.1
-    bodyCosmeticRewardScale: -0.1
+    linearVelocityXYRewardScale: 1.0
+    angularVelocityZRewardScale: 0.5
+    jointAccRewardScale: -2.5e-7
+    actionRateRewardScale: -0.01
+    cosmeticRewardScale: -1.4
+    orientationRewardScale: -0.01
 
     # normalization
-    linearVelocityScale: 1.0
+    linearVelocityScale: 2.0
     angularVelocityScale: 0.25
     dofPositionScale: 1.0
     dofVelocityScale: 0.05
 
     # episode length in seconds
     episodeLength_s: 50
-
-    min_body_height: 0.25
+    min_body_height: 0.22
+    tracking_sigma: 0.25
 
 sim:
   dt: 0.01
@@ -85,7 +84,7 @@ sim:
     worker_thread_count: ${....num_threads}
     solver_type: ${....solver_type}
     use_gpu: ${eq:${....sim_device},"gpu"} # set to False to run on CPU
-    solver_position_iteration_count: 6
+    solver_position_iteration_count: 4
     solver_velocity_iteration_count: 0
     contact_offset: 0.02
     rest_offset: 0.0

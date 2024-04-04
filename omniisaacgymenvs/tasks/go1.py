@@ -66,12 +66,12 @@ class Go1Task(RLTask):
         self.rew_scales = {}
         self.rew_scales["lin_vel_xy"] = self._task_cfg["env"]["learn"]["linearVelocityXYRewardScale"]
         self.rew_scales["ang_vel_z"] = self._task_cfg["env"]["learn"]["angularVelocityZRewardScale"]
-        self.rew_scales["lin_vel_z"] = self._task_cfg["env"]["learn"]["linearVelocityZRewardScale"]
         self.rew_scales["joint_acc"] = self._task_cfg["env"]["learn"]["jointAccRewardScale"]
         self.rew_scales["action_rate"] = self._task_cfg["env"]["learn"]["actionRateRewardScale"]
+        self.rew_scales["orientation"] = self._task_cfg["env"]["learn"]["orientationRewardScale"]
         self.rew_scales["cosmetic"] = self._task_cfg["env"]["learn"]["cosmeticRewardScale"]
-        self.rew_scales["body_cosmetic"] = self._task_cfg["env"]["learn"]["bodyCosmeticRewardScale"]
         self.min_body_height = self._task_cfg["env"]["learn"]["min_body_height"]
+        self.sigma = self._task_cfg["env"]["learn"]["tracking_sigma"]
 
         # command ranges
         self.command_x_range = self._task_cfg["env"]["randomCommandVelocityRanges"]["linear_x"]
@@ -144,6 +144,7 @@ class Go1Task(RLTask):
         dof_pos = self._go1s.get_joint_positions(clone=False)
         dof_vel = self._go1s.get_joint_velocities(clone=False)
 
+        lin_velocity = root_velocities[:, 0:3]
         ang_velocity = root_velocities[:, 3:6]
 
         base_ang_vel = quat_rotate_inverse(torso_rotation, ang_velocity) * self.ang_vel_scale
@@ -187,8 +188,9 @@ class Go1Task(RLTask):
         self.actions[:] = actions.clone().to(self._device)
 
         current_targets = self.default_dof_pos + self.action_scale * self.actions
-        self.current_targets[:] = torch.clamp(current_targets, self.go1_dof_lower_limits, self.go1_dof_upper_limits)
 
+        self.current_targets[:] = torch.clamp(current_targets, self.go1_dof_lower_limits, self.go1_dof_upper_limits)
+        
         self._go1s.set_joint_position_targets(self.current_targets, indices)
 
     def reset_idx(self, env_ids):
@@ -262,8 +264,8 @@ class Go1Task(RLTask):
     def calculate_metrics(self) -> None:
         torso_position, torso_rotation = self._go1s.get_world_poses(clone=False)
         root_velocities = self._go1s.get_velocities(clone=False)
-        dof_pos = self._go1s.get_joint_positions(clone=False)
-        dof_vel = self._go1s.get_joint_velocities(clone=False)
+        self.dof_pos = self._go1s.get_joint_positions(clone=False)
+        self.dof_vel = self._go1s.get_joint_velocities(clone=False)
 
         velocity = root_velocities[:, 0:3]
         ang_velocity = root_velocities[:, 3:6]
@@ -274,21 +276,24 @@ class Go1Task(RLTask):
         # velocity tracking reward
         lin_vel_error = torch.square(self.commands[:, 0] - base_lin_vel[:, 0])
         ang_vel_error = torch.square(self.commands[:, 1] - base_ang_vel[:, 2])
-        rew_lin_vel_xy = torch.exp(-lin_vel_error / 0.25) * self.rew_scales["lin_vel_xy"]
-        rew_ang_vel_z = torch.exp(-ang_vel_error / 0.25) * self.rew_scales["ang_vel_z"]
 
-        rew_lin_vel_z = torch.square(base_lin_vel[:, 2]) * self.rew_scales["lin_vel_z"]
-        rew_joint_acc = torch.sum(torch.square(self.last_dof_vel - dof_vel), dim=1) * self.rew_scales["joint_acc"]
+        rew_lin_vel_xy = torch.exp(-lin_vel_error/self.sigma) * self.rew_scales["lin_vel_xy"]   
+        rew_ang_vel_z = torch.exp(-ang_vel_error/self.sigma)* self.rew_scales["ang_vel_z"]
+
+        rew_joint_acc = torch.sum(torch.square((self.last_dof_vel - self.dof_vel) / self.dt), dim=1) * self.rew_scales["joint_acc"]
         rew_action_rate = torch.sum(torch.square(self.last_actions - self.actions), dim=1) * self.rew_scales["action_rate"]
-        rew_cosmetic = torch.sum(torch.square(dof_pos[:, 0:4] - self.default_dof_pos[:, 0:4]), dim=1) * self.rew_scales["cosmetic"]
-        projected_gravity = quat_rotate_inverse(torso_rotation, self.gravity_vec)
-        rew_body_cosmetic = torch.sum(torch.square(projected_gravity[:, 0:2]), dim=1) * self.rew_scales["body_cosmetic"]
 
-        total_reward = rew_lin_vel_z + rew_lin_vel_xy + rew_ang_vel_z + rew_joint_acc  + rew_action_rate + rew_cosmetic + rew_body_cosmetic
+        projected_gravity = quat_rotate_inverse(torso_rotation, self.gravity_vec)
+        rew_ori = torch.sum(torch.square(projected_gravity[:, :2]), dim=1) * self.rew_scales["orientation"]
+
+        #rew_cosmetic = torch.sum(torch.square(dof_pos[:, 0:4] - self.default_dof_pos[:, 0:4]), dim=1) * self.rew_scales["cosmetic"]
+        #rew_body_cosmetic = torch.sum(torch.square(projected_gravity[:, 0:2]), dim=1) * self.rew_scales["body_cosmetic"]
+
+        total_reward = rew_lin_vel_xy + rew_ang_vel_z + rew_joint_acc  + rew_action_rate + rew_ori
         total_reward = torch.clip(total_reward, 0.0, None)
 
         self.last_actions[:] = self.actions[:]
-        self.last_dof_vel[:] = dof_vel[:]
+        self.last_dof_vel[:] = self.dof_vel[:]
 
         self.fallen_over = self._go1s.is_base_below_threshold(threshold=self.min_body_height, ground_heights=0.0)
 
